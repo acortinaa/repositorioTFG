@@ -1,2 +1,1 @@
-Mi nuevo repositorio
-Aquí hago la prueba de editarlo y subirlo
+Prueba de README
