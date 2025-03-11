@@ -1,1 +1,4 @@
 myenv/
+trackml-library/
+__pycache__/
+
