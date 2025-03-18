@@ -5,4 +5,4 @@
 -11/03/25:	9:40 - 13:15	Descargar y procesar dataset. Empezar Kalman Filter.
 -13/03/25	9:45 - 13:05	Debatir cómo se hace el Kalman bien. Corregir y tomar valores de test y no de truth. 
 	Pensar en cómo trazar la trayectoria inicial con pares de hits.
-
+-17/03/25	9:50 - 13:05	Terminar algoritmos del Kalman.
