@@ -64,13 +64,15 @@ class KalmanFilter:
         for t in range(n - 2, -1, -1):
             K = self.gains[t]
             F = self.F
-            print(f"Dimensión de K: {K.shape}")
-            print(f"Dimensión de F: {F.shape}")
-            print(f"Dimensión de smoothed_states[t + 1]: {smoothed_states[t + 1].shape}")
-            print(f"Dimensión de self.states[t]: {self.states[t].shape}")
+            #print(f"Dimensión de K: {K.shape}")
+            #print(f"Dimensión de F: {F.shape}")
+            #print(f"Dimensión de smoothed_states[t + 1]: {smoothed_states[t + 1].shape}")
+            #print(f"Dimensión de self.states[t]: {self.states[t].shape}")
             # Realizamos el suavizado sobre el estado completo, pero actualizamos solo las posiciones
             smoothed_states[t] = self.states[t] + K @ (smoothed_states[t + 1] - F @ self.states[t])[[0, 2, 4], :] # Solo x, y, z
         
+        #print(f"Dimensión de self.states: {self.states.shape}")
+        print(f"Dimensión de smoothed_states: {smoothed_states.shape}")
         smoothed_states.reshape(-1, 1)  # Devolver el estado suavizado
         print(f"Dimensión de smoothed_states: {smoothed_states.shape}")
         
