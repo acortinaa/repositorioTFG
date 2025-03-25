@@ -1,6 +1,3 @@
-'''
-Script: Kalman Filter
-'''
 import numpy as np
 
 class KalmanFilter:
@@ -21,31 +18,28 @@ class KalmanFilter:
 
         self.states = []  # Almacenar los estados
         self.gains = []   # Almacenar las ganancias de Kalman
+        self.positions = []  # Almacenar solo las posiciones (x, y, z) para ploteo
 
     def predict(self):
         ''' Predicción del siguiente estado '''
         self.x = self.F @ self.x  # Predicción del siguiente estado
         self.C = self.F @ self.C @ self.F.T + self.Q  # Predicción de la covarianza del error
-        self.x = self.x.reshape(-1,1)
+        self.x = self.x.reshape(-1, 1)
         return self.x
     
     def update(self, m):    # m: medición
         ''' Actualización del estado con la medición m'''
-        m = m.reshape(-1,1)
-        r = (m - self.H @ self.x) # Diferencia entre la medición y la proyección del estado
+        m = m.reshape(-1, 1)
+        r = (m - self.H @ self.x)  # Diferencia entre la medición y la proyección del estado
         S = self.H @ self.C @ self.H.T + self.R  # Covarianza del nuevo valor (con el ruido de medición)
         K = self.C @ self.H.T @ np.linalg.inv(S)  # Ganancia de Kalman (cuánto confiar en la medición)
-        
-        #print(f"Dimensión de m: {m.shape}")
-        #print(f"Dimensión de r: {r.shape}")  
-        #print(f"Dimensión de K: {K.shape}")  
-        #print(f"Dimensión de self.x antes de actualizar: {self.x.shape}")  
 
         self.x = self.x + K @ r  # Estado actualizado
         self.C = (np.eye(self.C.shape[0]) - K @ self.H) @ self.C  # Covarianza del error actualizada
         
-        # Almacenar el estado y la ganancia de Kalman
-        self.states.append(self.x.copy())
+        # Almacenar el estado completo (6 dimensiones)
+        self.states.append(self.x.copy())  # Guarda todo el estado (6 dimensiones)
+        
         self.gains.append(K.copy())
         
         return self.x, K
@@ -55,6 +49,7 @@ class KalmanFilter:
         Proceso de iterativo de suavizado (RTS) desde el final. Se opera solo con (x, y, z) de los estados.
         '''
         n = len(self.states)  # Número de pasos
+        #print('Número de pasos n = ', n)
         smoothed_states = np.zeros_like(self.states)
 
         # El último estado es igual al estado filtrado (no necesita ser modificado)
@@ -65,16 +60,10 @@ class KalmanFilter:
             K = self.gains[t]
             F = self.F
             # Realizamos el suavizado sobre el estado completo, pero actualizamos solo las posiciones
-            smoothed_states[t] = self.states[t] + K @ (smoothed_states[t + 1] - F @ self.states[t])[[0, 2, 4], :] # Solo x, y, z
-        
-        #smoothed_states.reshape(-1, 1)  # Devolver el estado suavizado
-        #print(f"Dimensión de smoothed_states: {smoothed_states.shape}")
+            smoothed_states[t] = self.states[t] + K @ (smoothed_states[t + 1] - F @ self.states[t])[[0, 2, 4], :]  # Solo x, y, z
         
         smoothed_positions = smoothed_states[:, [0, 2, 4]]
         if smoothed_positions.shape[0] % 50 == 0:
             print(f"Dimensión de smoothed_positions: {smoothed_positions.shape}")
         
         return smoothed_states, smoothed_positions
-
-            
-        
