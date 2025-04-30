@@ -9,7 +9,7 @@ from trackml.score import score_event
 from scipy.spatial import cKDTree
 
 
-def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, threshold=30.0, min_ratio=0.5):
+def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, min_ratio, threshold=20.0):
     """
     Evalúa tracks a partir de sus best_hits. Verifica si suficientes best_hits
     están cerca de hits truth con el mismo particle_id.
@@ -23,20 +23,22 @@ def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, threshold=30
     Returns:
         valid_count: número de tracks válidos
         valid_track_indices: conjunto de índices de tracks válidos
+        track_to_pid: mapeo de índice de track a particle_id del truth
     """
+    from scipy.spatial import cKDTree
+
     tree = cKDTree(truth_hits[['tx', 'ty', 'tz']].values)
     truth_particles = truth_hits['particle_id'].values
     valid_count = 0
     valid_track_indices = set()
+    track_to_pid = {}
 
     for idx, track_hits in enumerate(hits_vecinos_por_track):
-        # Extraer solo los best_hits de este track
         best_hits = np.array([hit for hit, _ in track_hits])
 
         if len(best_hits) == 0:
             continue
 
-        # Buscar matches en el árbol
         dists, indices = tree.query(best_hits, distance_upper_bound=threshold)
         valid_idx = indices < len(truth_particles)
         matched_particles = truth_particles[indices[valid_idx]]
@@ -45,19 +47,16 @@ def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, threshold=30
             continue
 
         particle_counts = pd.Series(matched_particles).value_counts()
+        best_pid = particle_counts.index[0]
         best_pid_count = particle_counts.iloc[0]
         ratio = best_pid_count / len(best_hits)
 
         if ratio >= min_ratio:
             valid_count += 1
             valid_track_indices.add(idx)
+            track_to_pid[idx] = best_pid
 
-    return valid_count, valid_track_indices
-
-    return valid_count
-
-
-
+    return valid_count, valid_track_indices, track_to_pid
 
 
 

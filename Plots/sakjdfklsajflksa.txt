@@ -1,0 +1,73 @@
+import random
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.spatial.distance import cdist
+from trackml.randomize import shuffle_hits
+from trackml.score import score_event
+
+# Filtrar solo los volúmenes en el DataFrame `truth`
+truth_con_volumen = truth.merge(hits[['hit_id', 'volume_id']], on='hit_id', how='left')
+truth_filtrado = truth_con_volumen[truth_con_volumen['volume_id'].isin(volume_ids)]
+
+def construir_trayectorias_truth_weight(truth_df, min_hits_por_particula=1, OCTANTE=False):
+    trayectorias_truth = []
+    weights_truth = []
+    grouped = truth_df.groupby('particle_id')
+
+    for pid, grupo in grouped:
+        if len(grupo) >= min_hits_por_particula:
+            grupo_ordenado = grupo.sort_values('tz')
+            tray = grupo_ordenado[['tx', 'ty', 'tz']].values
+            weights = grupo_ordenado['weight'].values
+
+            # Filtro angular
+            v1 = tray[0] - vertex
+            v2 = tray[1] - vertex if len(tray) > 1 else tray[-1] - vertex
+            if cos_angle(v1, v2) < COS_THRESHOLD:
+                continue
+
+            # Filtrado por octante
+            if OCTANTE:
+                tray = tray[(tray[:, 0] > 0) & (tray[:, 1] > 0) & (tray[:, 2] > 0)]  # Filtro por primer octante
+
+            trayectorias_truth.append(tray)
+            weights_truth.append(weights)
+
+    return trayectorias_truth, weights_truth
+
+
+# Importamos las métricas
+from metric_scores import valid_tracks_from_best_hits
+min_ratio = 0.
+
+
+# Construir trayectorias y pesos del truth
+trayectorias_truth, pesos_truth = construir_trayectorias_truth_weight(truth_filtrado)
+print(f"Se reconstruyeron {len(trayectorias_truth)} trayectorias del truth.")
+
+# Mezclar los hits del truth
+shuffled_truth = shuffle_hits(truth_filtrado, 0.05)
+
+valid_tracks, valid_track_indices, track_to_pid = valid_tracks_from_best_hits(
+    hits_vecinos_por_track, truth_filtrado, min_ratio=min_ratio
+)
+
+total_tracks_reconstruidos = len(hits_vecinos_por_track)
+precision = valid_tracks / total_tracks_reconstruidos * 100
+recall = valid_tracks / len(trayectorias_truth) * 100
+
+print(f"Precision: {precision:.2f}%")
+print(f"Recall: {recall:.2f}%")
+f1_score = 2 * (precision * recall) / (precision + recall)
+print(f"F1 Score: {f1_score:.2f}%")
+
+
+# Score de referencia usando hits mezclados
+score_with_shuffled = score_event(truth_filtrado, shuffled_truth)
+if isinstance(score_with_shuffled, (float, np.float32)):
+    print(f"Puntuación máxima posible: {score_with_shuffled:.4f}")
+else:
+    print("Puntuación máxima posible:")
+    for metric, value in score_with_shuffled.items():
+        print(f"{metric}: {value:.4f}")

@@ -67,3 +67,48 @@ class KalmanFilter:
             print(f"Dimensión de smoothed_positions: {smoothed_positions.shape}")
         
         return smoothed_states, smoothed_positions
+    
+
+def apply_kalmanfilter(hit1, hit2, hits_dict_all_volumes, Q_COEFF, 
+                       get_initial_state, C, F, H, Q, R, volume_ids, campo_magnetico, 
+                       apply_lorentz_correction, SMOOTHING, charge_sign, HITS_CERCANOS=True):
+    x0 = get_initial_state(hit1, hit2)
+    kf = KalmanFilter(C=C, F=F, H=H, Q=Q, R=R, x0=x0)
+    pred_trajectory = []
+    hits_vecinos_por_track = []  # Aquí vamos a almacenar los hits vecinos por trayectoria
+    total_residual = 0.0
+
+    # Iteramos por cada volumen y capa
+    for volume_id in volume_ids:
+        for layer in sorted(hits_dict_all_volumes[volume_id].keys()):
+            hits_layer = hits_dict_all_volumes[volume_id][layer][['x', 'y', 'z']].values
+            kf.predict()
+            pred_pos = kf.x[[0, 2, 4]].flatten()
+            pred_trajectory.append(pred_pos)
+
+            Q_OVER_M = charge_sign * Q_COEFF
+            B = campo_magnetico(pred_pos[2])
+            apply_lorentz_correction(kf, B, Q_OVER_M)
+
+            # Calculamos las distancias entre el hit actual y todos los hits en la capa
+            distances = np.linalg.norm(hits_layer - pred_pos, axis=1)
+            best_hit = hits_layer[np.argmin(distances)]  # El hit más cercano
+            kf.update(best_hit)
+
+            # Chi²: suma de residuos al cuadrado
+            residual = best_hit - kf.x[[0, 2, 4]].flatten()
+            total_residual += np.sum(residual**2)
+
+
+            if HITS_CERCANOS:
+                closest_idxs = np.argsort(distances)[:5]  # Los 5 más cercanos
+                vecinos = hits_layer[closest_idxs[1:]]  # Excluye el mejor hit
+                hits_vecinos_por_track.append((best_hit, vecinos))  # Guardamos el best_hit y los vecinos
+
+    # Devolvemos las trayectorias predichas y los hits vecinos si es necesario
+    if SMOOTHING:
+        _, smoothed = kf.smoothing_RTS()
+        return smoothed.squeeze(), hits_vecinos_por_track, total_residual
+    else:
+        return np.array(pred_trajectory), hits_vecinos_por_track, total_residual
+
