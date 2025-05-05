@@ -29,7 +29,7 @@ def top_momentum(path, event):
         # #plt.show()
 
         #print(particles.head())
-        # Ordenar por pT descendente y seleccionar los 300 primeros
+        # Ordenar por pT descendente y seleccionar los x primeros
         top_particles = particles.sort_values(by='pt', ascending=False).head(100)
         print(f'Número de partículas seleccionadas: {len(top_particles)}')
         print(f'pT mayor = {top_particles.pt.max():.4f} GeV/c, pT menor = {top_particles.pt.min():.4f} GeV/c')
