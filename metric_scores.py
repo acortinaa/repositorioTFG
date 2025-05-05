@@ -9,7 +9,7 @@ from trackml.score import score_event
 from scipy.spatial import cKDTree
 
 
-def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, min_ratio, threshold=20.0):
+def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, min_ratio, threshold=30.0):
     """
     Evalúa tracks a partir de sus best_hits. Verifica si suficientes best_hits
     están cerca de hits truth con el mismo particle_id.
