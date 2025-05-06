@@ -111,4 +111,124 @@ def apply_kalmanfilter(hit1, hit2, hits_dict_all_volumes, Q_COEFF,
         return smoothed.squeeze(), hits_vecinos_por_track, total_residual
     else:
         return np.array(pred_trajectory), hits_vecinos_por_track, total_residual
+    
 
+### FUNCIONES AUXILIARES ###
+def cos_angle(v1, v2):
+    norm1, norm2 = np.linalg.norm(v1), np.linalg.norm(v2)
+    if norm1 == 0 or norm2 == 0:
+        return 1.0
+    return np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
+
+REDUCTION_FRACTION = 1.0
+def reduce_hits(hits, fraction=REDUCTION_FRACTION):
+    return hits.sample(frac=fraction, random_state=42)
+
+def campo_magnetico(z):
+    z = z / 2750
+    return 0.03 * z**3 - (0.55 - 0.3 * (1 - z**2)) * z**2 + 1.002
+
+OCTANTE = False
+def get_hits_dict(hits, volume_ids, OCTANTE = OCTANTE):
+    hits_dict_all = {}
+
+    for volume_id in volume_ids:
+        hits_volume = hits[hits.volume_id == volume_id].copy()
+        hits_volume['r'] = np.sqrt(hits_volume.x**2 + hits_volume.y**2 + hits_volume.z**2)
+
+        # Filtrar por el primer octante si OCTANTE es True
+        if OCTANTE:
+            hits_volume = hits_volume[(hits_volume['x'] > 0) & (hits_volume['y'] > 0) & (hits_volume['z'] > 0)]
+
+        # Crear el diccionario de hits por capa
+        hits_dict = {
+            layer: reduce_hits(hits_volume[hits_volume.layer_id == layer])
+            for layer in hits_volume['layer_id'].unique()
+        }
+
+        hits_dict_all[volume_id] = hits_dict
+
+    return hits_dict_all
+
+
+def get_initial_state(hit1, hit2):
+    # Asumimos que el vertex está en el origen (0, 0, 0)
+    v = hit2 - hit1
+    v_unit = v / np.linalg.norm(v)
+    velocity = np.linalg.norm(v)
+    return np.array([
+        hit1[0], v_unit[0]*velocity,
+        hit1[1], v_unit[1]*velocity,
+        hit1[2], v_unit[2]*velocity
+    ]).reshape(-1, 1)
+
+DT = 1
+def apply_lorentz_correction(kf, Bz, Q_OVER_M):
+    velocity = np.array([kf.x[1, 0], kf.x[3, 0], kf.x[5, 0]])
+    force = Q_OVER_M * np.cross(velocity, np.array([0, 0, 3 * Bz]))
+    new_velocity = velocity + DT*force
+    kf.x[1], kf.x[3], kf.x[5] = new_velocity
+
+
+HITS_CERCANOS = True  # Cambiar a False si no se quieren mostrar los hits cercanos
+import matplotlib.pyplot as plt
+import random
+import numpy as np
+# ======== VISUALIZACIONES ========
+def visualizar_3D_hits_y_tracks(volume_ids, hits_dict_all_volumes, tracks, hits_vecinos_por_track, TRACKS_TO_DRAW=30, VISUALIZAR=True):
+    fig = plt.figure(figsize=(12, 8))
+
+    # Subplot 3D
+    ax = fig.add_subplot(111, projection='3d')
+
+    if not HITS_CERCANOS:
+        for volume_id in volume_ids:
+            for layer in hits_dict_all_volumes[volume_id].keys():
+                hits_layer = hits_dict_all_volumes[volume_id][layer]
+                ax.scatter(hits_layer['x'], hits_layer['y'], hits_layer['z'], s=3, alpha=0.5)
+
+    # Muestras aleatorias de las trayectorias
+    muestras = random.sample(list(enumerate(tracks)), min(len(tracks), TRACKS_TO_DRAW))
+    for i, (idx, track) in enumerate(muestras):
+        ax.plot(track[:, 0], track[:, 1], track[:, 2], color='tab:red', alpha=0.8)
+
+        if HITS_CERCANOS and idx < len(hits_vecinos_por_track):
+            for best_hit, vecinos in hits_vecinos_por_track[idx]:
+                # Plot best hit en azul
+                ax.scatter(best_hit[0], best_hit[1], best_hit[2],
+                           color='blue', s=25, alpha=0.9,
+                           label='Best hit' if i == 0 else "")
+                # Plot vecinos en verde (esto no se visualizará en la proyección XY)
+                ax.scatter(vecinos[:, 0], vecinos[:, 1], vecinos[:, 2],
+                           color='limegreen', s=20, alpha=0.3)
+
+    ax.set_title('Trayectorias suavizadas con Kalman RTS')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    
+    # Proyección XY 2D
+    fig2, ax2 = plt.subplots(figsize=(8, 8))
+    
+    # Mostrar proyección XY de las trayectorias sin los vecinos verdes
+    for i, (idx, track) in enumerate(muestras):
+        x, y, z = track[:, 0], track[:, 1], track[:, 2]
+        ax2.plot(x, y, alpha=0.6)
+
+        # Marcar todos los puntos del track
+        for j in range(len(x)):
+            ax2.scatter(x[j], y[j], s=15, color='blue', alpha=0.5)  # Marca cada hit considerado
+
+        # Marcar los best_hits específicos de cada track con un color único
+        if HITS_CERCANOS and idx < len(hits_vecinos_por_track):
+            track_color = f"C{i}"  # Usar el mismo color por track (basado en el índice)
+            vecinos_del_track = hits_vecinos_por_track[idx]
+            for best_hit, vecinos in vecinos_del_track:
+                ax2.scatter(best_hit[0], best_hit[1], s=20, color=track_color, alpha=0.6, label=f'Best hit Track {i}' if i == 0 else "")
+
+    ax2.set_title('Proyección XY de las trayectorias')
+    ax2.axis('equal')  # Para mantener la proporción de los ejes X e Y
+    plt.tight_layout()
+
+    if VISUALIZAR:
+        plt.show()
