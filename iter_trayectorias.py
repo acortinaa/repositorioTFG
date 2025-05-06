@@ -1,13 +1,10 @@
 import numpy as np
 from top_momentum_module import top_momentum
-from kalman_filter import get_hits_dict, apply_kalmanfilter, get_initial_state
+from kalman_filter import get_hits_dict, apply_kalmanfilter, get_initial_state, cos_angle, campo_magnetico, apply_lorentz_correction
 
-def track_finding(path, event, pt_min, pt_max,
+def track_finding(hits, truth, top_particles, pt_min, pt_max,
                                     DT=1, COS_THRESHOLD=0, Q_COEFF_BASE=0.1, 
-                                    REDUCTION_FRACTION=1.0, TRACKS_TO_DRAW=30,
-                                    SMOOTHING=True, OCTANTE=False, VISUALIZAR=False):
-
-    hits, truth, top_particles = top_momentum(path, event, pt_min=pt_min, pt_max=pt_max)
+                                    SMOOTHING=True, OCTANTE=False):
 
     if (top_particles['pt'] > 3).any():
         Q_COEFF = 0.01
@@ -17,9 +14,6 @@ def track_finding(path, event, pt_min, pt_max,
     volume_ids = hits['volume_id'].unique()
     volume_ids = volume_ids[[1, 4, 7]]  # Selección específica de volúmenes
     first_volume = volume_ids[0]
-
-    def reduce_hits(hits, fraction=REDUCTION_FRACTION):
-        return hits.sample(frac=fraction, random_state=42)
 
     hits_dict_all_volumes = get_hits_dict(hits, volume_ids, OCTANTE=OCTANTE)
 
@@ -80,7 +74,4 @@ def track_finding(path, event, pt_min, pt_max,
     print(f"Rango pT: {pt_min:.2f} - {pt_max:.2f} GeV/c")
     print(f"Total tracks: {len(tracks)}, Positivos: {positivos}, Negativos: {negativos}")
 
-    if VISUALIZAR:
-        visualizar_3D_hits_y_tracks(tracks, hits_vecinos_por_track, hits_dict_all_volumes, volume_ids, TRACKS_TO_DRAW, HITS_CERCANOS, SMOOTHING)
-
-    return tracks, hits_vecinos_por_track, top_particles
+    return tracks, hits_vecinos_por_track, top_particles, volume_ids, hits_dict_all_volumes, truth

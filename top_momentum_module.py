@@ -1,49 +1,53 @@
-# Importar librerías necesarias
 from trackml.dataset import load_event
-from trackml.utils import add_position_quantities, add_momentum_quantities, decode_particle_id
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import random
 
-
-def top_momentum(path, event, pt_min=3.5, pt_max=np.inf):
-    hits, cells, particles, truth = load_event(path+event)
-
-    # Calcular pT
+def top_momentum(hits, particles, truth, pt_min=3.5, pt_max=np.inf, r_max=2.6, vz_bounds=(-25, 25), VISUALIZAR = False):
+    # Calcular pT y r
     particles['pt'] = np.sqrt(particles['px']**2 + particles['py']**2)
+    particles['r'] = np.sqrt(particles.vx**2 + particles.vy**2 + particles.vz**2)
+    particles['phi'] = np.arctan2(particles.vy, particles.vx)
+    particles['theta'] = np.arccos(particles.vz / particles.r)
 
-    # Filtrar partículas por intervalo de pt
-    particles_filtered = particles[(particles['pt'] >= pt_min) & (particles['pt'] <= pt_max)]
+    if 'pt' not in particles.columns:
+        particles['pt'] = np.sqrt(particles['px']**2 + particles['py']**2)
 
-    # Ordenar por pT descendente y seleccionar los top 100 (si hay más de 100)
-    top_particles = particles_filtered.sort_values(by='pt', ascending=False)
-    print(f'Número de partículas seleccionadas: {len(top_particles)}')
-    if not top_particles.empty:
-        print(f'pT mayor = {top_particles.pt.max():.4f} GeV/c, pT menor = {top_particles.pt.min():.4f} GeV/c')
+    # Filtro por pT
+    particles = particles[(particles['pt'] >= pt_min) & (particles['pt'] <= pt_max)]
 
-    # Obtener IDs de partículas seleccionadas
-    particle_ids = top_particles.particle_id.unique()
+    # Filtro por zona central
+    particles = particles[(particles['r'] < r_max) & 
+                          (particles['vz'] > vz_bounds[0]) & 
+                          (particles['vz'] < vz_bounds[1])]
 
-    # Filtrar hits y truth
-    hits_all = hits.copy()
+    print(f'Partículas seleccionadas: {len(particles)}')
+    if not particles.empty:
+        print(f'pT max = {particles.pt.max():.4f} GeV/c, pT min = {particles.pt.min():.4f} GeV/c')
+
+    # Filtrado de truth e hits
+    particle_ids = particles.particle_id.unique()
     truth = truth[truth.particle_id.isin(particle_ids)]
+    hits_all = hits.copy()
     hits = hits[hits.hit_id.isin(truth.hit_id)]
 
     print("Los datos que tomo son un {:.4f}% de los datos originales".format(hits.shape[0]/hits_all.shape[0]*100))
     print(len(hits.hit_id.unique()), "hits seleccionados")
 
-    # Representación 3D
-    fig = plt.figure(figsize=(6, 4))
-    plt.suptitle('particles_reduced')
-    ax = fig.add_subplot(111, projection='3d')
-    ax.plot(hits.x, hits.y, hits.z, 'o', markersize=.5, alpha=1., label='Hits correspondientes')
-    ax.legend(loc='best')
-    ax.set_xlabel('X (mm)')
-    ax.set_ylabel('Y (mm)')
-    ax.set_zlabel('Z (mm)')
-    # plt.show()
+    print(f"→ particle_ids únicos: {len(particle_ids)}")
+    print(f"→ truth con esos particle_ids: {len(truth)}")
+    print(f"→ hits con esos hit_id: {len(hits)}")
 
-    return hits, truth, top_particles
+    if VISUALIZAR:
+        # Representación 3D
+        fig = plt.figure(figsize=(6, 4))
+        plt.suptitle('Hits seleccionados ' + rf'($p_T\ \in\ [{pt_min},\ {pt_max})\ GeV/c)$', fontsize=12)
+        ax = fig.add_subplot(111, projection='3d')
+        ax.plot(hits.x, hits.y, hits.z, 'o', markersize=.5, alpha=1., label='Hits')
+        ax.legend(loc='best')
+        ax.set_xlabel('X (mm)')
+        ax.set_ylabel('Y (mm)')
+        ax.set_zlabel('Z (mm)')
+        plt.show()
+
+    return hits, particles, truth
