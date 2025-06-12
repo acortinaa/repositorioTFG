@@ -1,4 +1,8 @@
 myenv/
 trackml-library/
 __pycache__/
-
+tf-env/
+0515/
+my_model.h5
+ML_trackfinding/__pycache__/
+ML_trackfinding/output/
