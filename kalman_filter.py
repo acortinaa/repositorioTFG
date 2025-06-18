@@ -129,7 +129,15 @@ def campo_magnetico(z):
     return 0.03 * z**3 - (0.55 - 0.3 * (1 - z**2)) * z**2 + 1.002
 
 OCTANTE = False
-def get_hits_dict(hits, volume_ids, OCTANTE = OCTANTE):
+def get_hits_dict(hits, volume_ids, OCTANTE = OCTANTE, angle_range = None, p_range = None):
+    '''
+    Crea un diccionario de hits por volumen y capa, filtrando por el primer octante y/o rango de ángulo y p.
+    hits: DataFrame con las columnas ['volume_id', 'layer_id', 'x', 'y', 'z']
+    volume_ids: lista de IDs de volúmenes a considerar
+    OCTANTE: si True, filtra por el primer octante (x, y, z > 0)
+    angle_range: tupla (min, max) en grados para filtrar por ángulo theta
+    p_range: tupla (min, max) para filtrar por p (momento) en GeV/c
+    '''
     hits_dict_all = {}
 
     for volume_id in volume_ids:
@@ -139,6 +147,23 @@ def get_hits_dict(hits, volume_ids, OCTANTE = OCTANTE):
         # Filtrar por el primer octante si OCTANTE es True
         if OCTANTE:
             hits_volume = hits_volume[(hits_volume['x'] > 0) & (hits_volume['y'] > 0) & (hits_volume['z'] > 0)]
+
+        if angle_range is not None:
+            # Calculamos theta en grados
+            hits_volume['theta'] = np.degrees(np.arccos(hits_volume['z'] / hits_volume['r']))
+            # Filtrar por rango de theta (en grados)
+            hits_volume = hits_volume[(hits_volume['theta'] >= angle_range[0]) & (hits_volume['theta'] <= angle_range[1])]
+
+        if p_range is not None:
+            print(f"Rango de p: {p_range} GeV/c")
+            # Calculamos p
+            #hits_volume['p'] = np.sqrt(hits_volume['px']**2 + hits_volume['py']**2 + hits_volume['pz']**2)
+            # Filtrar por rango de p
+            hits_volume_all = hits_volume
+            hits_volume = hits_volume[(hits_volume['p'] >= p_range[0]) & (hits_volume['p'] <= p_range[1])]
+            print(f"Volumen {volume_id} tiene {len(hits_volume)} hits después del filtrado por p")
+            print(f"% de hits conservados: {len(hits_volume) / len(hits_volume_all) * 100:.2f}%\n")
+
 
         # Crear el diccionario de hits por capa
         hits_dict = {
