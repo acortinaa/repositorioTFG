@@ -9,7 +9,7 @@ from trackml.score import score_event
 from scipy.spatial import cKDTree
 
 
-def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, min_ratio, threshold=20.0):
+def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, min_ratio, threshold=5.0):
     """
     Evalúa tracks a partir de sus best_hits. Verifica si suficientes best_hits
     están cerca de hits truth con el mismo particle_id.
@@ -34,8 +34,8 @@ def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, min_ratio, t
     track_to_pid = {}
 
     for idx, track_hits in enumerate(hits_vecinos_por_track):
-        best_hits = np.array([hit for hit, _ in track_hits])
-
+        best_hits = np.array([hit for hit, _ in track_hits])#[3:]])
+        
         if len(best_hits) == 0:
             continue
 
@@ -57,6 +57,49 @@ def valid_tracks_from_best_hits(hits_vecinos_por_track, truth_hits, min_ratio, t
             track_to_pid[idx] = best_pid
 
     return valid_count, valid_track_indices, track_to_pid
+
+
+
+def valid_tracks_from_kalman_tracks(tracks, pids_por_track, truth_hits, min_ratio=0.5, threshold=5.0):
+    from scipy.spatial import cKDTree
+    valid_count = 0
+    valid_track_indices = set()
+
+    for idx, track in enumerate(tracks):
+        pid = pids_por_track.get(idx, -1)
+        if pid == -1:
+            continue
+        truth_pid_hits = truth_hits[truth_hits['particle_id'] == pid][['tx', 'ty', 'tz']].values
+        if len(truth_pid_hits) == 0:
+            continue
+        tree = cKDTree(truth_pid_hits)
+        dists, _ = tree.query(track, distance_upper_bound=threshold)
+        matched = dists < threshold
+        ratio = np.sum(matched) / len(track)
+        if ratio >= min_ratio:
+            valid_count += 1
+            valid_track_indices.add(idx)
+
+    return valid_count, valid_track_indices, pids_por_track
+
+def valid_tracks_from_kalman_tracks_no_pid(tracks, truth_hits, min_ratio=0.5, threshold=5.0):
+    from scipy.spatial import cKDTree
+    valid_count = 0
+    valid_track_indices = set()
+
+    tree = cKDTree(truth_hits[['tx', 'ty', 'tz']].values)
+
+    for idx, track in enumerate(tracks):
+        dists, _ = tree.query(track, distance_upper_bound=threshold)
+        matched = dists < threshold
+        ratio = np.sum(matched) / len(track)
+        if ratio >= min_ratio:
+            valid_count += 1
+            valid_track_indices.add(idx)
+
+    return valid_count, valid_track_indices
+
+
 
 
 

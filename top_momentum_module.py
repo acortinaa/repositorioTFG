@@ -7,8 +7,8 @@ def top_momentum(hits, particles, truth, pt_min=3.5, pt_max=np.inf, r_max=2.6, v
     # Calcular pT y r
     particles['pt'] = np.sqrt(particles['px']**2 + particles['py']**2)
     particles['r'] = np.sqrt(particles.vx**2 + particles.vy**2 + particles.vz**2)
-    particles['phi'] = np.arctan2(particles.vy, particles.vx)
-    particles['theta'] = np.arccos(particles.vz / particles.r)
+    #particles['phi'] = np.arctan2(particles.vy, particles.vx)
+    #particles['theta'] = np.arccos(particles.vz / particles.r)
 
     if 'pt' not in particles.columns:
         particles['pt'] = np.sqrt(particles['px']**2 + particles['py']**2)
@@ -16,7 +16,7 @@ def top_momentum(hits, particles, truth, pt_min=3.5, pt_max=np.inf, r_max=2.6, v
     # Filtro por pT
     particles = particles[(particles['pt'] >= pt_min) & (particles['pt'] <= pt_max)]
 
-    # Filtro por zona central
+    # Filtro por zona central vertex
     particles = particles[(particles['r'] < r_max) & 
                           (particles['vz'] > vz_bounds[0]) & 
                           (particles['vz'] < vz_bounds[1])]

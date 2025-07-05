@@ -1,0 +1,250 @@
+from trackml.dataset import load_event
+import numpy as np
+import os
+from kalman_filter import filtering_by_theta, hits_vertex, apply_kalmanfilter, get_initial_state, campo_magnetico, apply_lorentz_correction
+from top_momentum_module import top_momentum
+from iter_trayectorias import track_finding
+from scipy.spatial import cKDTree
+from tqdm import tqdm
+from metric_scores import valid_tracks_from_best_hits, valid_tracks_from_kalman_tracks
+
+event = 'event000001000'
+
+# 1. Carga evento
+hits, cells, particles, truth = load_event(path + event)
+PARTICLES_FROM_VERTEX = True
+hits, particles = hits_vertex(hits, particles, truth, PARTICLES_FROM_VERTEX=PARTICLES_FROM_VERTEX)
+
+# 2. Añadir pt a particles
+particles['pt'] = np.sqrt(particles['px']**2 + particles['py']**2)
+
+# 3. Filtrar partículas y hits para pT > 0.5
+pt_min = 0.5
+pt_max = np.inf
+hits_filtered, particles_filtered, truth_filtered = top_momentum(hits, particles, truth, pt_min=pt_min, pt_max=pt_max)
+print(truth_filtered.head)
+
+if hits_filtered.empty:
+    print("No hay hits con pt > 0.5")
+    exit()
+
+# 4. Cargar tripletes desescalados
+data_dir = '/mnt/d/TFG - Dataset/OUTPUT'
+filename = f'triplets_trained_{event}.npz'
+load_path = os.path.join(data_dir, filename)
+data_loaded = np.load(load_path)
+X_triplets_descaled = data_loaded['triplets']
+print(f"Tripletes cargados con forma: {X_triplets_descaled.shape}")
+
+# 5. Preparar hits_dict y volúmenes para filtro Kalman
+thetamin, thetamax = filtering_by_theta(hits_filtered)
+volume_ids = hits_filtered['volume_id'].unique()
+volume_ids = volume_ids[[1,4,7]] 
+
+# Función auxiliar que debes tener para hits_dict, por ejemplo:
+# hits_dict = get_hits_dict(hits_filtered, volume_ids, OCTANTE=False, angle_range=(-round(thetamin), round(thetamax)), pt_range=None)
+hits_dict = get_hits_dict(hits_filtered, volume_ids, OCTANTE=False, angle_range=(-round(thetamin), round(thetamax)), pt_range=None)
+
+# 6. Construcción de tracks desde tripletes con Kalman (función adaptada)
+from collections import Counter
+from scipy.spatial import cKDTree
+from tqdm import tqdm
+
+def build_tracks_from_triplets(X_triplets, hits_dict, volume_ids,
+                               get_initial_state, campo_magnetico, apply_lorentz_correction,
+                               SMOOTHING=True, truth_hits=None, hits_filtered=None):
+    tracks = []
+    hits_vecinos_por_track = []
+    pids_por_track = {}
+
+    Q_COEFF = 0.01
+    DT = 1.0
+
+    F = np.array([[1, DT, 0,  0,  0,  0],
+                  [0,  1,  0,  0,  0,  0],
+                  [0,  0,  1, DT,  0,  0],
+                  [0,  0,  0,  1,  0,  0],
+                  [0,  0,  0,  0,  1, DT],
+                  [0,  0,  0,  0,  0,  1]])
+    H = np.array([[1, 0, 0, 0, 0, 0],
+                  [0, 0, 1, 0, 0, 0],
+                  [0, 0, 0, 0, 1, 0]])
+    C = np.eye(6) * 1e-1
+    Q = np.eye(6) * 1e-2
+    R = np.eye(3) * 1e-2
+
+    # Construir KDTree para buscar hit_id a partir de coords
+    tree_hits = cKDTree(hits_filtered[['x','y','z']].values)
+    coords_to_hitid = hits_filtered[['hit_id','x','y','z']].copy()
+
+    for idx, triplet in enumerate(tqdm(X_triplets, desc="Kalman sobre tripletes")):
+        if triplet.shape != (3, 3):
+            print(f"Triplet {idx} con forma incorrecta {triplet.shape}, se ignora.")
+            continue
+
+        hit1, hit2, hit3 = triplet
+
+        # Kalman +1
+        track_pos, hits_vec_pos, chi2_pos = apply_kalmanfilter(
+            hit1, hit2, hit3, hits_dict, Q_COEFF,
+            get_initial_state, C, F, H, Q, R, volume_ids,
+            campo_magnetico, apply_lorentz_correction, SMOOTHING, +1)
+
+        # Kalman -1
+        track_neg, hits_vec_neg, chi2_neg = apply_kalmanfilter(
+            hit1, hit2, hit3, hits_dict, Q_COEFF,
+            get_initial_state, C, F, H, Q, R, volume_ids,
+            campo_magnetico, apply_lorentz_correction, SMOOTHING, -1)
+
+        if chi2_pos < chi2_neg:
+            tracks.append(track_pos)
+            chosen_hits_coords = hits_vec_pos
+        else:
+            tracks.append(track_neg)
+            chosen_hits_coords = hits_vec_neg
+
+        # Mapear coordenadas de hits a hit_id usando KDTree
+        hit_ids_track = []
+        for coord in chosen_hits_coords:
+            coord = np.array(coord)
+            if coord.shape == (3,):
+                dist, idx_hit = tree_hits.query(coord, distance_upper_bound=0.01)  # Ajusta umbral si es necesario
+                if dist != np.inf:
+                    hit_id = coords_to_hitid.iloc[idx_hit]['hit_id']
+                    hit_ids_track.append(hit_id)
+            else:
+                print(f"Warning: coord with shape {coord.shape} ignorada.")
+
+
+        hits_vecinos_por_track.append(hit_ids_track)
+
+        # Etiquetar con particle_id usando truth_hits
+        if truth_hits is not None and len(hit_ids_track) > 0:
+            truth_sub = truth_hits[truth_hits['hit_id'].isin(hit_ids_track)]
+            if len(truth_sub) == 0:
+                pids_por_track[idx] = -1
+            else:
+                pid_counts = Counter(truth_sub['particle_id'])
+                pid_dominante = pid_counts.most_common(1)[0][0]
+                pids_por_track[idx] = pid_dominante
+        else:
+            pids_por_track[idx] = -1
+
+    return tracks, hits_vecinos_por_track, pids_por_track
+
+
+# 7. Ejecutar reconstrucción
+# Merges hits_filtered y truth_filtered para tener las coordenadas 'tx', 'ty', 'tz' y particle_id juntas
+merged = hits_filtered.merge(
+    truth_filtered[['hit_id', 'tx', 'ty', 'tz']],
+    on='hit_id', how='inner'
+)
+print(merged.columns)
+
+# Ahora sí, crea truth_hits con las columnas correctas
+truth_hits = merged[['hit_id', 'tx', 'ty', 'tz', 'particle_id']]
+
+
+tracks, hits_vecinos_por_track, pids_por_track = build_tracks_from_triplets(
+    X_triplets_descaled, hits_dict, volume_ids,
+    get_initial_state, campo_magnetico, apply_lorentz_correction,
+    SMOOTHING=True, truth_hits=truth_hits, hits_filtered=hits_filtered
+)
+
+
+print(f"Total tracks generados: {len(tracks)}")
+
+# 8. Evaluación de precisión similar a tu pipeline
+#valid_count, valid_track_indices, track_to_pid = (hits_vecinos_por_track, truth_hits, min_ratio, threshold=5.0)
+valid_count, valid_track_indices = valid_tracks_from_kalman_tracks(tracks, pids_por_track, truth_hits, min_ratio=0.5, threshold=5.0)
+
+print(f"Precisión de tracks reconstruidos: {precision:.2f}% ({valid_tracks} / {total_tracks})")
+
+
+
+import matplotlib.pyplot as plt
+import random
+
+# === Evaluación ===
+valid_indices = []
+all_track_to_pid = {}
+
+for idx, hits_track in enumerate(hits_vecinos_por_track):
+    pids = []
+    for ht in hits_track:
+        if isinstance(ht, tuple) and len(ht) > 1:
+            pid = ht[1]
+            try:
+                pid_int = int(pid) if not isinstance(pid, int) else pid
+                pids.append(pid_int)
+            except:
+                continue
+    if len(pids) == 0:
+        continue
+    counts = Counter(pids)
+    pid_max, max_count = counts.most_common(1)[0]
+    ratio = max_count / len(pids)
+    if ratio >= 0.5:
+        valid_indices.append(idx)
+    all_track_to_pid[idx] = pid_max
+
+valid_tracks_total = len(valid_indices)
+total_tracks = len(tracks)
+precision_global = valid_tracks_total / total_tracks * 100 if total_tracks > 0 else 0
+print(f"\n🎯 Precisión global: {precision_global:.2f}% ({valid_tracks_total} / {total_tracks})")
+
+# === Visualización ===
+#N = min(50, total_tracks)  # número de tracks a mostrar
+N = total_tracks
+num_valid = min(int(0.8 * N), len(valid_indices))
+num_invalid = max(min(N - num_valid, total_tracks - num_valid), 0)
+
+sampled_valids = random.sample(valid_indices, num_valid) if num_valid > 0 else []
+invalid_indices = [i for i in range(total_tracks) if i not in valid_indices]
+sampled_invalids = random.sample(invalid_indices, num_invalid) if num_invalid > 0 else []
+
+indices_to_plot = sampled_valids + sampled_invalids
+random.shuffle(indices_to_plot)
+
+fig = plt.figure(figsize=(12, 8))
+ax = fig.add_subplot(111, projection='3d')
+
+label_valid_done = False
+label_invalid_done = False
+label_truth_done = False
+
+for idx in indices_to_plot:
+    track = np.array(tracks[idx])
+    if track.shape[0] < 2:
+        continue  # ignoramos tracks vacíos o de un solo punto
+
+    # Truth
+    pid = all_track_to_pid.get(idx, -1)
+    truth_track = truth_hits[truth_hits['particle_id'] == pid][['tx', 'ty', 'tz']].sort_values('tz').values
+
+    is_valid = idx in valid_indices
+    color = 'tab:green' if is_valid else 'tab:red'
+
+    label_track = ""
+    if is_valid and not label_valid_done:
+        label_track = "Válidas"
+        label_valid_done = True
+    elif not is_valid and not label_invalid_done:
+        label_track = "Incorrectas"
+        label_invalid_done = True
+
+    label_truth = ""
+    if len(truth_track) > 0 and not label_truth_done:
+        label_truth = "Truth"
+        label_truth_done = True
+
+    ax.plot(track[:, 0], track[:, 1], track[:, 2], color=color, alpha=0.7, label=label_track)
+    if len(truth_track) > 0:
+        ax.plot(truth_track[:, 0], truth_track[:, 1], truth_track[:, 2], color='blue', alpha=0.5, linestyle='-', label=label_truth)
+
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
+ax.set_title(r'Trayectorias reconstruidas $→$ Kalman + ML')
+ax.legend()
+plt.show()

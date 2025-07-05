@@ -114,6 +114,7 @@ def hits_vertex(hits, particles, truth, PARTICLES_FROM_VERTEX):
     particles['phi'] = np.arctan2(particles.vy, particles.vx)
     particles['theta'] = np.arccos(particles.vz / particles.r)
     particles['p'] = np.sqrt(particles.px**2 + particles.py**2 + particles.pz**2)
+    particles['pt'] = np.sqrt(particles.px**2 + particles.py**2) 
     
     truth = truth[truth.particle_id.isin(particles.particle_id)]
     particles_all = particles
@@ -142,14 +143,14 @@ def hits_vertex(hits, particles, truth, PARTICLES_FROM_VERTEX):
     hits['theta'] = np.degrees(np.arctan2(np.sqrt(hits['x']**2 + hits['y']**2), hits['z']))
 
     # Añadimos de particles el momento p a los hits correspondientes
-    hits = hits.merge(particles[['particle_id', 'p']], on='particle_id', how='left')
+    hits = hits.merge(particles[['particle_id', 'pt']], on='particle_id', how='left')
     # Mínimo y máximo de p
-    print("Mínimo p: {:.2f} GeV/c".format(hits.p.min()))
-    print("Máximo p: {:.2f} GeV/c".format(hits.p.max()))
+    print("Mínimo p: {:.2f} GeV/c".format(hits.pt.min()))
+    print("Máximo p: {:.2f} GeV/c".format(hits.pt.max()))
 
     print("Número de partículas totales: {}".format(particles_all.particle_id.nunique()))
-    print("Número de partículas únicas con p<0.5 GeV/C: {}".format(
-        hits[hits.p < 0.5].particle_id.nunique()))
+    print("Número de partículas únicas con pt<0.5 GeV/C: {}".format(
+        hits[hits.pt < 0.5].particle_id.nunique()))
 
     print(hits.head())
     return hits, particles
@@ -201,7 +202,7 @@ def training_triplet_model(event, model=None):
     # Parámetros adicionales
     batch_size = 32
     lr = 1e-5
-    epochs = 100
+    epochs = 500
 
     # Cargamos el modelo
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -212,7 +213,7 @@ def training_triplet_model(event, model=None):
         model = model.to(device)
 
     # Ponderación de clases
-    PONDERACION = False
+    PONDERACION = True
     if PONDERACION:
         pos_weight = torch.tensor([num_neg / num_pos], dtype=torch.float32).to(device)
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
@@ -260,6 +261,12 @@ def training_triplet_model(event, model=None):
 
     model.train()
     start = time.time()
+
+    # Early Stopping
+    best_f1 = 0
+    epochs_no_improve = 0
+    patience = 10
+    best_model_state = None
 
 
     log.write(' iter   |  valid_loss  valid_acc |  train_loss  train_acc | time\n')
@@ -316,7 +323,26 @@ def training_triplet_model(event, model=None):
         train_accs.append(train_acc)
         valid_accs.append(v_acc)
 
+        from sklearn.metrics import f1_score
+
+        y_true_epoch, y_pred_epoch = predict_all(model, val_loader, device)
+        f1 = f1_score(y_true_epoch, y_pred_epoch)
+
+        if f1 > best_f1:
+            best_f1 = f1
+            best_model_state = model.state_dict()
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"\nEarly stopping en epoch {epoch+1}: no mejora de F1 en {patience} epochs consecutivos.")
+                break
+
     # print(f'\nEvaluation metrics...\n{evaluate_metrics(model, val_loader)}')
+
+    # Restaurar mejor modelo si se usó early stopping
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
 
     import io
     import contextlib

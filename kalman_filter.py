@@ -69,18 +69,23 @@ class KalmanFilter:
         return smoothed_states, smoothed_positions
     
 
-def apply_kalmanfilter(hit1, hit2, hits_dict_all_volumes, Q_COEFF, 
-                       get_initial_state, C, F, H, Q, R, volume_ids, campo_magnetico, 
-                       apply_lorentz_correction, SMOOTHING, charge_sign, HITS_CERCANOS=True):
-    x0 = get_initial_state(hit1, hit2)
+def apply_kalmanfilter(hit0, hit1, hit2, hits_dict_all_volumes, Q_COEFF, 
+                       get_initial_state, C, F, H, Q, R, volume_ids, 
+                       campo_magnetico, apply_lorentz_correction, SMOOTHING, 
+                       charge_sign, HITS_CERCANOS=True):
+    x0 = get_initial_state(hit0, hit1, hit2)
     kf = KalmanFilter(C=C, F=F, H=H, Q=Q, R=R, x0=x0)
     pred_trajectory = []
     hits_vecinos_por_track = []  # Aquí vamos a almacenar los hits vecinos por trayectoria
     total_residual = 0.0
+    volume_id_inicial = volume_ids[0]
+    triplet_layers = {(volume_id_inicial, 2), (volume_id_inicial, 4), (volume_id_inicial, 6)}
 
     # Iteramos por cada volumen y capa
     for volume_id in volume_ids:
         for layer in sorted(hits_dict_all_volumes[volume_id].keys()):
+            if (volume_id, layer) in triplet_layers:
+                continue
             hits_layer = hits_dict_all_volumes[volume_id][layer][['x', 'y', 'z']].values
             kf.predict()
             pred_pos = kf.x[[0, 2, 4]].flatten()
@@ -126,10 +131,10 @@ def reduce_hits(hits, fraction=REDUCTION_FRACTION):
 
 def campo_magnetico(z):
     z = z / 2750
-    return 0.03 * z**3 - (0.55 - 0.3 * (1 - z**2)) * z**2 + 1.002
+    return (0.01 * z**3 - (0.55 - 0.3 * (1 - z**2)) * z**2 + 1.002)
 
 OCTANTE = False
-def get_hits_dict(hits, volume_ids, OCTANTE = OCTANTE, angle_range = None, p_range = None):
+def get_hits_dict(hits, volume_ids, OCTANTE = OCTANTE, angle_range = None, pt_range = None):
     '''
     Crea un diccionario de hits por volumen y capa, filtrando por el primer octante y/o rango de ángulo y p.
     hits: DataFrame con las columnas ['volume_id', 'layer_id', 'x', 'y', 'z']
@@ -154,20 +159,18 @@ def get_hits_dict(hits, volume_ids, OCTANTE = OCTANTE, angle_range = None, p_ran
             # Filtrar por rango de theta (en grados)
             hits_volume = hits_volume[(hits_volume['theta'] >= angle_range[0]) & (hits_volume['theta'] <= angle_range[1])]
 
-        if p_range is not None:
-            print(f"Rango de p: {p_range} GeV/c")
-            # Calculamos p
-            #hits_volume['p'] = np.sqrt(hits_volume['px']**2 + hits_volume['py']**2 + hits_volume['pz']**2)
+        if pt_range is not None:
+            print(f"Rango de p: {pt_range} GeV/c")
             # Filtrar por rango de p
             hits_volume_all = hits_volume
-            hits_volume = hits_volume[(hits_volume['p'] >= p_range[0]) & (hits_volume['p'] <= p_range[1])]
-            print(f"Volumen {volume_id} tiene {len(hits_volume)} hits después del filtrado por p")
+            hits_volume = hits_volume[(hits_volume['pt'] >= pt_range[0]) & (hits_volume['pt'] <= pt_range[1])]
+            print(f"Volumen {volume_id} tiene {len(hits_volume)} hits después del filtrado por pt")
             print(f"% de hits conservados: {len(hits_volume) / len(hits_volume_all) * 100:.2f}%\n")
 
 
         # Crear el diccionario de hits por capa
         hits_dict = {
-            layer: reduce_hits(hits_volume[hits_volume.layer_id == layer])
+            layer: hits_volume[hits_volume.layer_id == layer]
             for layer in hits_volume['layer_id'].unique()
         }
 
@@ -176,21 +179,137 @@ def get_hits_dict(hits, volume_ids, OCTANTE = OCTANTE, angle_range = None, p_ran
     return hits_dict_all
 
 
-def get_initial_state(hit1, hit2):
-    # Asumimos que el vertex está en el origen (0, 0, 0)
-    v = hit2 - hit1
-    v_unit = v / np.linalg.norm(v)
-    velocity = np.linalg.norm(v)
+def filtering_by_theta(hits):
+    # 1. Primer volumen
+    first_volume = hits.volume_id.unique()
+    first_volume = sorted(first_volume)[0]
+
+    hits_vol = hits[hits.volume_id == first_volume].copy()
+
+    # 2. Ordenamos por valor absoluto de z
+    hits_vol['abs_z'] = hits_vol['z'].abs()
+    hits_vol_sorted = hits_vol.sort_values(by='abs_z')
+
+    # 3. Tomamos el mínimo y máximo z en valor absoluto
+    min_z_hit = hits_vol_sorted.iloc[0]
+    max_z_hit = hits_vol_sorted.iloc[-1]
+
+    # 4. Calculamos el ángulo theta en grados para ambos hits
+    def compute_theta_deg(x, y, z):
+        r = np.sqrt(x**2 + y**2 + z**2)
+        # Evitar división por cero
+        if r == 0:
+            return 0.0
+        theta = np.degrees(np.arccos(z / r))
+        return theta
+
+    theta_min = compute_theta_deg(min_z_hit['x'], min_z_hit['y'], min_z_hit['z'])
+    theta_max = compute_theta_deg(max_z_hit['x'], max_z_hit['y'], max_z_hit['z'])
+
+    print(f"Ángulo theta mínimo (z más pequeño en valor absoluto): {theta_min:.2f}°")
+    print(f"Ángulo theta máximo (z más grande en valor absoluto): {theta_max:.2f}°")
+    return theta_min, theta_max
+
+
+
+def hits_vertex(hits, particles, truth, PARTICLES_FROM_VERTEX):
+    ''' Filtra los hits para quedarnos solo con los del detector central '''
+
+    def distance(particle):
+        ''' Distancia en mm de la partícula al origen'''
+        return np.sqrt(particle.vx**2 + particle.vy**2 + particle.vz**2)
+
+    particles['r'] = distance(particles)
+    #particles['phi'] = np.arctan2(particles.vy, particles.vx)
+    #particles['theta'] = np.arccos(particles.vz / particles.r)
+    particles['p'] = np.sqrt(particles.px**2 + particles.py**2 + particles.pz**2)
+    particles['pt'] = np.sqrt(particles.px**2 + particles.py**2) 
+    
+    truth = truth[truth.particle_id.isin(particles.particle_id)]
+    particles_all = particles
+
+    if PARTICLES_FROM_VERTEX:
+        # Voy a coger solo las partículas con r < 2.6
+        particles = particles[particles.r < 2.6]
+
+        # Con ese radio, voy a coger solo las partículas con z entre -25 y 25 mm
+        particles = particles[(particles.vz > -25) & (particles.vz < 25)]
+
+        # Del truth cojo solo las partículas que están en particles
+        truth = truth[truth.particle_id.isin(particles.particle_id)]
+
+        # Cojo ahora los hits_id que están en truth
+        hits_all = hits
+        hits = hits[hits.hit_id.isin(truth.hit_id)]
+
+        print("Los datos que tomo son un {:.4f}% de los datos originales".format(hits.shape[0]/hits_all.shape[0]*100))
+
+    # Unimos los particle_id a hits
+    hits = hits.merge(truth[['hit_id', 'particle_id']], on='hit_id', how='left')
+
+    #hits['phi'] = np.degrees(np.arctan2(hits['y'], hits['x']))
+    #hits['phi'] = (hits['phi'] + 360) % 360  # Normaliza a [0, 360)
+    #hits['theta'] = np.degrees(np.arctan2(np.sqrt(hits['x']**2 + hits['y']**2), hits['z']))
+
+    # Añadimos de particles el momento p a los hits correspondientes
+    hits = hits.merge(particles[['particle_id', 'pt']], on='particle_id', how='left')
+    # Mínimo y máximo de p
+    print("Mínimo pt: {:.2f} GeV/c".format(hits.pt.min()))
+    print("Máximo pt: {:.2f} GeV/c".format(hits.pt.max()))
+
+    print("Número de partículas totales: {}".format(particles_all.particle_id.nunique()))
+    print("Número de partículas únicas con pt<0.5 GeV/C: {}".format(
+        hits[hits.pt < 0.5].particle_id.nunique()))
+
+    print(hits.head())
+    return hits, particles, truth
+
+def construir_trayectorias_truth_weight(truth_df, min_hits_por_particula=10, OCTANTE=False):
+    trayectorias_truth = []
+    weights_truth = []
+    grouped = truth_df.groupby('particle_id')
+
+    for pid, grupo in grouped:
+        if len(grupo) >= min_hits_por_particula:
+            grupo_ordenado = grupo.sort_values('tz')
+            tray = grupo_ordenado[['tx', 'ty', 'tz']].values
+            weights = grupo_ordenado['weight'].values
+
+            # Filtrado por octante
+            if OCTANTE:
+                tray = tray[(tray[:, 0] > 0) & (tray[:, 1] > 0) & (tray[:, 2] > 0)]  # Filtro por primer octante
+
+            trayectorias_truth.append(tray)
+            weights_truth.append(weights)
+
+    return trayectorias_truth, weights_truth
+
+
+def get_initial_state(hit0, hit1, hit2):
+    """
+    Estima el estado inicial usando tres hits: hit0, hit1, hit2
+    Asume movimiento uniforme entre los hits para estimar la velocidad inicial.
+    
+    hit0, hit1, hit2: np.array de tamaño (3,) representando x, y, z
+    Devuelve un vector columna con estado inicial: [x, vx, y, vy, z, vz]
+    """
+    # Estimamos la posición inicial como la del segundo hit (punto medio)
+    x, y, z = hit1
+
+    # Estimamos la velocidad usando derivada central: (hit2 - hit0)/2
+    v = (hit2 - hit0) / 2.0
+
     return np.array([
-        hit1[0], v_unit[0]*velocity,
-        hit1[1], v_unit[1]*velocity,
-        hit1[2], v_unit[2]*velocity
+        x, v[0],
+        y, v[1],
+        z, v[2]
     ]).reshape(-1, 1)
+
 
 DT = 1
 def apply_lorentz_correction(kf, Bz, Q_OVER_M):
     velocity = np.array([kf.x[1, 0], kf.x[3, 0], kf.x[5, 0]])
-    force = Q_OVER_M * np.cross(velocity, np.array([0, 0, 3 * Bz]))
+    force = Q_OVER_M * np.cross(velocity, np.array([0, 0, 3.8 * Bz]))
     new_velocity = velocity + DT*force
     kf.x[1], kf.x[3], kf.x[5] = new_velocity
 

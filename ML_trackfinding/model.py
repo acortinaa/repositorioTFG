@@ -27,16 +27,16 @@ class TripletNet(nn.Module):
         self.feature = nn.Sequential(
             Linear_Bn(3*num_points, 64),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            #nn.Dropout(0.3),
             Linear_Bn(64,  128),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            #nn.Dropout(0.3),
             Linear_Bn(128,  256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            #nn.Dropout(0.3),
             Linear_Bn(256,  512),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            #nn.Dropout(0.3),
             Linear_Bn(512,  1024),
             nn.ReLU(inplace=True),
             nn.Dropout(0.3),
@@ -49,13 +49,13 @@ class TripletNet(nn.Module):
             nn.Dropout(0.3),
             Linear_Bn(1024, 512),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            #nn.Dropout(0.3),
             Linear_Bn(512,  256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            #nn.Dropout(0.3),
             Linear_Bn(256,  128),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            #nn.Dropout(0.3),
             Linear_Bn(128,   64),
             nn.ReLU(inplace=True),
         )
@@ -128,19 +128,23 @@ if __name__ == '__main__':
 class SimpleNet(nn.Module):
     def __init__(self):
         super(SimpleNet, self).__init__()
+        num_points = 3
         self.net = nn.Sequential(
-            nn.Linear(9, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
+            Linear_Bn(3*num_points, 64),
+            nn.ReLU(inplace=True),
+            Linear_Bn(64,  128),
+            nn.ReLU(inplace=True),
+            Linear_Bn(128, 256),
+            nn.ReLU(inplace=True),
             nn.Dropout(0.3),
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
+            Linear_Bn(256, 128),
+            nn.ReLU(inplace=True),
+            Linear_Bn(128,64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 1)  
         )
 
     def forward(self, x):
         x = x.view(x.size(0), -1)
-        return self.net(x).squeeze(1)
+        return self.net(x).squeeze(1) 
+
