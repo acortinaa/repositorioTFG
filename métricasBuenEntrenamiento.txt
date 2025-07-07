@@ -1,0 +1,42 @@
+=== Métricas finales en conjunto de validación ===
+Accuracy:  0.8966
+Precision: 0.8162
+Recall:    0.8459
+F1-score:  0.8308
+
+Confusion Matrix (Validación):
+[[14671  1304]
+ [ 1055  5792]]
+
+Classification Report (Validación):
+              precision    recall  f1-score   support
+
+         0.0     0.9329    0.9184    0.9256     15975
+         1.0     0.8162    0.8459    0.8308      6847
+
+    accuracy                         0.8966     22822
+   macro avg     0.8746    0.8821    0.8782     22822
+weighted avg     0.8979    0.8966    0.8972     22822
+
+
+### Sobre el primer evento:
+
+=== Evaluación del modelo final ===
+Accuracy:  0.9054
+Precision: 0.7755
+Recall:    0.8456
+F1-score:  0.8091
+
+Confusion Matrix:
+[[3392  279]
+ [ 176  964]]
+
+Classification Report:
+              precision    recall  f1-score   support
+
+         0.0     0.9507    0.9240    0.9371      3671
+         1.0     0.7755    0.8456    0.8091      1140
+
+    accuracy                         0.9054      4811
+   macro avg     0.8631    0.8848    0.8731      4811
+weighted avg     0.9092    0.9054    0.9068      4811

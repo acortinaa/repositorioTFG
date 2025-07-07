@@ -85,7 +85,7 @@ def apply_kalmanfilter(hit0, hit1, hit2, hits_dict_all_volumes, Q_COEFF,
     for volume_id in volume_ids:
         for layer in sorted(hits_dict_all_volumes[volume_id].keys()):
             if (volume_id, layer) in triplet_layers:
-                continue
+                 continue
             hits_layer = hits_dict_all_volumes[volume_id][layer][['x', 'y', 'z']].values
             kf.predict()
             pred_pos = kf.x[[0, 2, 4]].flatten()
@@ -103,7 +103,6 @@ def apply_kalmanfilter(hit0, hit1, hit2, hits_dict_all_volumes, Q_COEFF,
             # Chi²: suma de residuos al cuadrado
             residual = best_hit - kf.x[[0, 2, 4]].flatten()
             total_residual += np.sum(residual**2)
-
 
             if HITS_CERCANOS:
                 closest_idxs = np.argsort(distances)[:5]  # Los 5 más cercanos

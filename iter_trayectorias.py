@@ -1,6 +1,6 @@
 import numpy as np
 from top_momentum_module import top_momentum
-from kalman_filter import get_hits_dict, apply_kalmanfilter, get_initial_state, cos_angle, campo_magnetico, apply_lorentz_correction
+from kalman_filter import get_hits_dict, apply_kalmanfilter, get_initial_state, cos_angle, campo_magnetico, apply_lorentz_correction, get_initial_state_modified
 
 
 def track_finding(hits, truth, top_particles, pt_min, pt_max,
@@ -121,11 +121,12 @@ def track_finding(hits, truth, top_particles, pt_min, pt_max,
     return tracks, hits_vecinos_por_track, top_particles, volume_ids, hits_dict_all_volumes, truth, triplet_precision
 
 
+
 ### TRACKFINDING WITH ML
 def track_finding_from_triplet_coords(X_triplets, hits, truth, top_particles,
                                       volume_ids, hits_dict_all_volumes, 
                                       DT=1.0, COS_THRESHOLD=None,
-                                      Q_COEFF_BASE=0.01, SMOOTHING=True):
+                                      Q_COEFF_BASE=1.0, SMOOTHING=True):
 
     import numpy as np
 
@@ -142,12 +143,12 @@ def track_finding_from_triplet_coords(X_triplets, hits, truth, top_particles,
                   [0, 0, 0, 0, 1, 0]])
 
     C = np.eye(6) * 1e-1
-    Q = np.eye(6) * 1e-2
-    R = np.eye(3) * 1e-2
+    Q = np.eye(6) * 1e-5
+    R = np.eye(3) * 1e-5
 
     # Coeficiente Q dinámico
     if (top_particles['pt'] > 3).any():
-        Q_COEFF = 0.01
+        Q_COEFF = Q_COEFF_BASE
     else:
         Q_COEFF = Q_COEFF_BASE
 

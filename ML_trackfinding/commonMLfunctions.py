@@ -72,10 +72,14 @@ def plot_all_positive_triplets(triplets, labels, layer1, layer2, layer3):
 
 
 # Dataset personalizado
+import torch
+from torch.utils.data import Dataset
+import numpy as np
+
 class TripletDataset(Dataset):
     def __init__(self, X, y):
-        self.X = torch.tensor(X, dtype=torch.float32)
-        self.y = torch.tensor(y, dtype=torch.float32)
+        self.X = X if isinstance(X, torch.Tensor) else torch.tensor(X, dtype=torch.float32)
+        self.y = y if isinstance(y, torch.Tensor) else torch.tensor(y, dtype=torch.float32)
 
     def __len__(self):
         return len(self.X)
@@ -83,25 +87,29 @@ class TripletDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
+
 # Dataset y dataloaders
-def create_dataloaders(X, y, batch_size, seed=42):
+from torch.utils.data import DataLoader, random_split
+
+def create_dataloaders(X, y, batch_size, seed=42,
+                       num_workers=0, pin_memory=False):
     dataset = TripletDataset(X, y)
-    train_size = int(0.9 * len(dataset))
-    val_size = len(dataset) - train_size
+    train_size = int(0.8 * len(dataset))
+    val_size   = len(dataset) - train_size
+    generator  = torch.Generator().manual_seed(seed)
+    train_ds, val_ds = random_split(dataset, [train_size, val_size], generator=generator)
 
-    # Establece la semilla para reproducibilidad
-    generator = torch.Generator().manual_seed(seed)
-    
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=generator)
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-    print("Dataset original length:", len(dataset))
-    print("Train subset length:", len(train_dataset))
-    print("Val subset length:", len(val_dataset))
-
+    train_loader = DataLoader(train_ds, batch_size=batch_size,
+                              shuffle=True,
+                              num_workers=num_workers,
+                              pin_memory=pin_memory)
+    val_loader   = DataLoader(val_ds, batch_size=batch_size,
+                              shuffle=False,
+                              num_workers=num_workers,
+                              pin_memory=pin_memory)
+    print(f"Dataset length: {len(dataset)}, train: {len(train_ds)}, val: {len(val_ds)}")
     return train_loader, val_loader
+
 
 def hits_vertex(hits, particles, truth, PARTICLES_FROM_VERTEX):
     ''' Filtra los hits para quedarnos solo con los del detector central '''
@@ -167,7 +175,7 @@ def write_metrics_to_log(out_dir , event, accuracy_score, precision_score, y_tru
         metrics_file.write("\nClassification Report:\n")
         metrics_file.write(f"{classification_report(y_true, y_pred, digits=4)}\n")
 
-def predict_all(model, loader, device):
+def predict_all(model, loader, device, return_probs=False):
     model.eval()
     y_true_all = []
     y_pred_all = []
@@ -175,34 +183,32 @@ def predict_all(model, loader, device):
         for x_batch, y_batch in loader:
             x_batch = x_batch.to(device)
             logits = model(x_batch)
-            preds = (torch.sigmoid(logits) > 0.5).float().cpu()
-            y_true_all.append(y_batch.cpu())
-            y_pred_all.append(preds)
+            probs = torch.sigmoid(logits).cpu()
+            y_true_all.append(y_batch.float().cpu())
+
+            if return_probs:
+                y_pred_all.append(probs)
+            else:
+                preds = (probs > 0.5).float()
+                y_pred_all.append(preds)
+
     y_true = torch.cat(y_true_all).numpy()
     y_pred = torch.cat(y_pred_all).numpy()
     return y_true, y_pred
 
-def training_triplet_model(event, model=None):
-    # Sacamos los valores de X y y
-    data_dir = '/mnt/d/TFG - Dataset/OUTPUT'  # Ruta montada en WSL
-    X = np.load(os.path.join(data_dir, f'triplets_data_{event}.npz'))['X']
-    y = np.load(os.path.join(data_dir, f'triplets_data_{event}.npz'))['y']
 
+def training_triplet_model(X, y, model=None, device=None, epochs=500, batch_size=32, lr=1e-3):
+
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    X = torch.tensor(X, dtype=torch.float32)
+    y = torch.tensor(y, dtype=torch.float32)
+    train_loader, val_loader = create_dataloaders(X, y, batch_size=batch_size, num_workers=4, pin_memory=True)
 
     print(f"Shape de X: {X.shape}\t Shape de y: {y.shape}\n")
 
     num_pos = (y == 1).sum().item() if isinstance(y, torch.Tensor) else np.sum(y == 1)
     num_neg = (y == 0).sum().item() if isinstance(y, torch.Tensor) else np.sum(y == 0)
     print(f"Positivos: {num_pos}\t Total negatives: {num_neg}")
-
-    # Aseguramos que X y y son tensores de PyTorch
-    X = torch.tensor(X, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32)
-
-    # Parámetros adicionales
-    batch_size = 32
-    lr = 1e-5
-    epochs = 500
 
     # Cargamos el modelo
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -231,9 +237,10 @@ def training_triplet_model(event, model=None):
 
     # Cargamos los datos
     train_loader, val_loader = create_dataloaders(X, y, batch_size=batch_size)
-
-    iter_accum = 1
-    iter_valid = len(train_loader)
+    print("Verificando que train_loader funcione correctamente...")
+    for batch in train_loader:
+        print("Primer batch obtenido correctamente.")
+        break
 
     def evaluate(model, loader):
         model.eval()
@@ -254,8 +261,6 @@ def training_triplet_model(event, model=None):
 
     # Training loop 
     train_loss, valid_loss = 0, 0
-    j = 0  # steps
-    i = 0  # iteraciones acumuladas
 
     train_losses, valid_losses, train_accs, valid_accs = [], [], [], []
 
@@ -265,68 +270,60 @@ def training_triplet_model(event, model=None):
     # Early Stopping
     best_f1 = 0
     epochs_no_improve = 0
-    patience = 10
+    patience = 8
     best_model_state = None
 
 
     log.write(' iter   |  valid_loss  valid_acc |  train_loss  train_acc | time\n')
     log.write('---------------------------------------------------------------\n')
+    from tqdm import tqdm
+    from sklearn.metrics import confusion_matrix
 
     for epoch in range(epochs):
         sum_loss = 0.0
         correct = 0
         total = 0
+        model.train()
 
-        for x, y in train_loader:
+        # tqdm para ver cuántos batches llevas de la época
+        for batch_idx, (x, y) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")):
             x, y = x.to(device), y.to(device)
-
             optimizer.zero_grad()
-
             logits = model(x)
             loss = criterion(logits, y)
             loss.backward()
-
-            if j % iter_accum == 0:
-                optimizer.step()
+            optimizer.step()
 
             preds = (torch.sigmoid(logits) > 0.5).float()
+
             correct += (preds == y).sum().item()
             total += y.size(0)
             sum_loss += loss.item() * x.size(0)
 
-            if j % iter_valid == 0 and j > 0:
-                v_loss, v_acc = evaluate(model, val_loader)
-                train_loss = sum_loss / total
-                train_acc = correct / total
-                t = time.strftime("%H:%M:%S", time.gmtime(time.time() - start))
-
-                log.write(f'{j:6d} |  {v_loss:.4f}     {v_acc:.4f} |  {train_loss:.4f}     {train_acc:.4f} | {t}\n')
-                log.flush()
-
-                sum_loss = 0.0
-                correct = 0
-                total = 0
-
-            j += 1
-
-        # Al final del epoch calculamos métricas finales (entrenamiento y validación)
-        train_loss = sum_loss / total if total > 0 else 0
-        train_acc = correct / total if total > 0 else 0
-        v_loss, v_acc = evaluate(model, val_loader)
-
-        print(f'- Epoch {epoch+1}/{epochs} completed.')
-        print(f'\tTrain Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}')
-        print(f'\tValidation Loss: {v_loss:.4f}, Validation Acc: {v_acc:.4f}')
-        print(f'\tTime elapsed: {time.strftime("%H:%M:%S", time.gmtime(time.time() - start))}')
-        train_losses.append(train_loss)
-        valid_losses.append(v_loss)
-        train_accs.append(train_acc)
-        valid_accs.append(v_acc)
-
+        # Al terminar la época:
         from sklearn.metrics import f1_score
 
         y_true_epoch, y_pred_epoch = predict_all(model, val_loader, device)
         f1 = f1_score(y_true_epoch, y_pred_epoch)
+
+        # Calcular matriz de confusión para TP, TN, FP, FN
+        tn, fp, fn, tp = confusion_matrix(y_true_epoch, y_pred_epoch).ravel()
+
+        train_loss = sum_loss / total
+        train_acc  = correct / total
+        v_loss, v_acc = evaluate(model, val_loader)
+        print(f"- End Epoch {epoch+1}: "
+            f"Train Loss {train_loss:.4f}, Train Acc {train_acc:.4f} | "
+            f"Val Loss {v_loss:.4f}, Val Acc {v_acc:.4f} | "
+            f"F1 score {f1:.4f}")
+
+        print(f"\tTP: {tp}, TN: {tn}, FP: {fp}, FN: {fn}")
+        print(f'\tTime elapsed: {time.strftime("%H:%M:%S", time.gmtime(time.time() - start))}')
+
+        train_losses.append(train_loss)
+        valid_losses.append(v_loss)
+        train_accs.append(train_acc)
+        valid_accs.append(v_acc)
 
         if f1 > best_f1:
             best_f1 = f1
@@ -338,6 +335,7 @@ def training_triplet_model(event, model=None):
                 print(f"\nEarly stopping en epoch {epoch+1}: no mejora de F1 en {patience} epochs consecutivos.")
                 break
 
+
     # print(f'\nEvaluation metrics...\n{evaluate_metrics(model, val_loader)}')
 
     # Restaurar mejor modelo si se usó early stopping
@@ -348,9 +346,6 @@ def training_triplet_model(event, model=None):
     import contextlib
 
     # Guardado final
-    SAVE_PER_EVENT = False
-    if SAVE_PER_EVENT:
-        torch.save(model.state_dict(), f'{out_dir}/checkpoint/final_model_{event}.pth')
     log.write('\n** Finished Training **\n')
 
 
@@ -379,8 +374,46 @@ def training_triplet_model(event, model=None):
     log.write("\nClassification Report (Validación):\n")
     log.write(f"{classification_report(y_true, y_pred, digits=4)}\n")
 
-    write_metrics_to_log(out_dir , event, accuracy_score, precision_score, y_true,
+    write_metrics_to_log(out_dir ,'event_combined_precise', accuracy_score, precision_score, y_true,
                         y_pred, recall_score, f1_score, confusion_matrix, classification_report)
+
+    from sklearn.metrics import roc_curve, roc_auc_score
+
+    # Obtener probabilidades
+    y_true, y_probs = predict_all(model, val_loader, device, return_probs=True)
+
+    # Curva ROC
+    fpr, tpr, thresholds = roc_curve(y_true, y_probs)
+    roc_auc = roc_auc_score(y_true, y_probs)
+
+    # Umbral óptimo según Youden's J statistic
+    optimal_idx = np.argmax(tpr - fpr)
+    best_thresh = thresholds[optimal_idx]
+
+    # Métricas con mejor umbral
+    y_pred_opt = (y_probs > best_thresh).astype(int)
+
+    print(f"\n=== ROC y análisis de umbral ===")
+    print(f"AUC: {roc_auc:.4f}")
+    print(f"Umbral óptimo: {best_thresh:.4f}")
+    print(f"Accuracy (ópt):  {accuracy_score(y_true, y_pred_opt):.4f}")
+    print(f"Precision (ópt): {precision_score(y_true, y_pred_opt):.4f}")
+    print(f"Recall (ópt):    {recall_score(y_true, y_pred_opt):.4f}")
+    print(f"F1-score (ópt):  {f1_score(y_true, y_pred_opt):.4f}")
+    print("\nConfusion Matrix (óptimo):")
+    print(confusion_matrix(y_true, y_pred_opt))
+
+    # Plot ROC
+    plt.figure()
+    plt.plot(fpr, tpr, label=f'AUC = {roc_auc:.4f}')
+    plt.plot([0, 1], [0, 1], 'k--')
+    plt.scatter(fpr[optimal_idx], tpr[optimal_idx], c='red', label=f'Mejor umbral = {best_thresh:.2f}')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Curva ROC')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
     # Cierre del log
     log.close()
@@ -401,7 +434,114 @@ def training_triplet_model(event, model=None):
         plt.ylabel('Accuracy')
         plt.legend()
         plt.show()
-
+   
     return model
+
+import numpy as np
+import pandas as pd
+def generate_triplets_from_hits(hits, pt_min=0, pt_max=np.inf, cone_angle_fn=None):
+    def connection_cone_filter(pairs, layer):
+        if cone_angle_fn is None:
+            dic_cone_angles = {
+                # 0: np.pi / 6.2,   # 5°
+                # 1: np.pi / 4.5,   # 6°
+                # 2: np.pi / 4,     # 7.5°
+                0: np.deg2rad(5),
+                1: np.deg2rad(6.5),
+                2: np.deg2rad(8)
+            }
+            cone_angle_aperture = dic_cone_angles.get(layer, np.pi / 4)
+        else:
+            cone_angle_aperture = cone_angle_fn(pairs['z_in'])  # aplica por vector
+
+        x1 = pairs['x_in']
+        y1 = pairs['y_in']
+        z1 = pairs['z_in']
+        x2 = pairs['x_out']
+        y2 = pairs['y_out']
+        z2 = pairs['z_out']
+
+        dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
+
+        dot = x1 * dx + y1 * dy + z1 * dz
+        norm1 = x1**2 + y1**2 + z1**2
+        norm2 = dx**2 + dy**2 + dz**2
+
+        cos_theta = dot / (np.sqrt(norm1 * norm2) + 1e-9)
+        cos_z = z1 / (np.sqrt(norm1) + 1e-9)
+        sin_z = np.sqrt(np.clip(1 - cos_z**2, 0, 1))
+
+        if isinstance(cone_angle_aperture, float):
+            eff_aperture = cone_angle_aperture * sin_z
+        else:
+            eff_aperture = cone_angle_aperture * sin_z  # array-wise
+
+        cos_alpha = np.cos(eff_aperture / 2)
+
+        return pairs[cos_theta >= cos_alpha].reset_index(drop=True)
+
+    # Etapa 1: Capas 0 y 1
+    layer0 = hits[hits['layer'] == 0].reset_index(drop=True)
+    layer1 = hits[hits['layer'] == 1].reset_index(drop=True)
+
+    pairs01 = pd.merge(layer0, layer1, on='n_event', suffixes=('_in', '_out'))
+    pairs01 = connection_cone_filter(pairs01, layer=0)
+    pairs01['label'] = (pairs01['particle_id_in'] == pairs01['particle_id_out']) & (pairs01['particle_id_in'] != 0)
+
+    # Etapa 2: unir con capa 2
+    layer2 = hits[hits['layer'] == 2].reset_index(drop=True)
+
+    triplets = pd.merge(pairs01, layer2, on='n_event', suffixes=('', '_3'))
+    triplets = triplets.rename(columns={
+        'x': 'x3', 'y': 'y3', 'z': 'z3',
+        'layer': 'layer3', 'particle_id': 'pid3', 'pt': 'pt3',
+        'hit_id': 'hit_id3'
+    })
+
+    # Filtro angular entre punto 2 y 3
+    x2, y2, z2 = triplets['x_out'], triplets['y_out'], triplets['z_out']
+    x3, y3, z3 = triplets['x3'], triplets['y3'], triplets['z3']
+    dx, dy, dz = x3 - x2, y3 - y2, z3 - z2
+
+    dot = x2 * dx + y2 * dy + z2 * dz
+    norm1 = x2**2 + y2**2 + z2**2
+    norm2 = dx**2 + dy**2 + dz**2
+
+    cos_theta = dot / (np.sqrt(norm1 * norm2) + 1e-9)
+    cos_z = z2 / (np.sqrt(norm1) + 1e-9)
+    sin_z = np.sqrt(np.clip(1 - cos_z**2, 0, 1))
+
+    if cone_angle_fn is None:
+        cone_angle_aperture = np.pi / 4
+    else:
+        cone_angle_aperture = cone_angle_fn(z2)
+
+    eff_aperture = cone_angle_aperture * sin_z
+    cos_alpha = np.cos(eff_aperture / 2)
+
+    triplets = triplets[cos_theta >= cos_alpha].reset_index(drop=True)
+
+    # Etiquetas
+    triplets['label'] = (
+        (triplets['particle_id_in'] == triplets['particle_id_out']) &
+        (triplets['particle_id_out'] == triplets['pid3']) &
+        (triplets['particle_id_in'] != 0)
+    ).astype(int)
+
+    # Filtro pt
+    pt_mask = (
+        (triplets['pt_in'] >= pt_min) & (triplets['pt_in'] <= pt_max) &
+        (triplets['pt_out'] >= pt_min) & (triplets['pt_out'] <= pt_max) &
+        (triplets['pt3'] >= pt_min) & (triplets['pt3'] <= pt_max)
+    )
+    triplets = triplets[pt_mask].reset_index(drop=True)
+
+    # Arrays finales
+    coords = triplets[['x_in', 'y_in', 'z_in', 'x_out', 'y_out', 'z_out', 'x3', 'y3', 'z3']].values
+    X = coords.reshape(-1, 3, 3)
+    y = triplets['label'].values
+    pt_values = triplets['pt_in'].values  # podrías usar promedio si prefieres
+
+    return X, y, pt_values
 
 
